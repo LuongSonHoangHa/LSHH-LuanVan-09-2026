@@ -13,81 +13,106 @@ Trong các sàn thương mại điện tử (Shopee, Tiki, Lazada, ...), cùng m
 
 **Mục tiêu**: Cho một sản phẩm sản phẩm gồm cặp `(image, title)`, hệ thống cần truy xuất và gom cụm tất cả các sản phẩm thuộc cùng một sản phẩm vật lý (`label_group`) trên toàn sàn.
 
-### 1.2. Ý tưởng giải pháp kỹ thuật
-1. **Kiến trúc hai nhánh độc lập (Two-Branch Late Fusion)**:
-   - **Nhánh Thị giác (Vision)**: Sử dụng backbone **NFNet-F0** (không dùng BatchNorm, trích xuất đặc trưng sâu sắc) kết hợp lớp gom cụm thích nghi **GeM Pooling ($p=3$)** và tầng chiếu tuyến tính về không gian nhúng 512 chiều.
-   - **Nhánh Ngôn ngữ (Language)**: Sử dụng mô hình biến đổi Transformer đa ngữ mạnh mẽ **multilingual-E5-large** (1024 chiều), đóng băng 18 tầng đầu và tinh chỉnh 6 tầng cuối cùng, chiếu về không gian 512 chiều.
-2. **Học biểu diễn khoảng cách góc bằng ArcFace (Additive Angular Margin Loss)**:
-   - Các vector nhúng được chuẩn hóa trên mặt cầu đơn vị siêu không gian ($L_2$-normalized).
-   - Hàm ArcFace áp đặt biên độ góc $m = 0.50$ và tỷ lệ co giãn $s = 30.0$, buộc các sản phẩm cùng nhóm nhãn (`label_group`) co cụm lại cực kỳ chặt chẽ trong khi đẩy lùi góc phân tách giữa các nhóm khác nhau.
-3. **Chiến lược hợp nhất hậu kỳ (Late Fusion) & Hậu xử lý truy vấn**:
-   - Từng mô thức đưa ra các dự đoán độc lập với ngưỡng cosine tối ưu riêng biệt.
-   - Ghép nối vector (Concatenation) và hợp tập kết quả (Union of Matches).
-   - Khảo sát hậu xử lý **$\alpha$-QE (Alpha Query Expansion)** và **DBA (Database-side Augmentation)** để tinh chỉnh trọng tâm vector truy vấn.
+### 1.2. Hai kiến trúc so sánh chính
+
+Luận văn so sánh **hai hướng tiếp cận đa mô thức** đã được tinh chỉnh (fine-tuned) với ArcFace:
+
+#### Kiến trúc A — Late Fusion (NFNet-F0 + multilingual-E5-large)
+Hai encoder độc lập, mỗi mô thức xử lý riêng biệt rồi hợp nhất ở hậu kỳ:
+- **Nhánh Thị giác**: **NFNet-F0** backbone → GeM Pooling (p=3) → Linear(512) → ArcFace
+- **Nhánh Ngôn ngữ**: **multilingual-E5-large** (đóng băng 18/24 layers, finetune 6 layers cuối) → Mean Pooling → Linear(512) → ArcFace
+- **Hợp nhất**: Late Fusion — cosine retrieval độc lập từng nhánh, ghép concat hoặc union kết quả
+
+#### Kiến trúc B — CLIP (Joint Multimodal Encoder)
+Một encoder duy nhất được huấn luyện sẵn để hiểu đồng thời ảnh và văn bản:
+- **CLIP** (ViT-B/32) — joint image-text embedding space
+- Tinh chỉnh với ArcFace trên tập huấn luyện (`merge_train.csv`)
+- Cosine retrieval trực tiếp trên embedding CLIP + ArcFace head
+
+#### Hàm mất mát chung — ArcFace (Additive Angular Margin Loss)
+Áp dụng cho cả hai kiến trúc:
+$$L = -\log\frac{e^{s\cdot\cos(\theta_{y_i} + m)}}{e^{s\cdot\cos(\theta_{y_i} + m)} + \sum_{j \neq y_i} e^{s\cdot\cos\theta_j}}, \quad s=30.0,\ m=0.50$$
 
 ---
 
 ## 2. Kiến trúc hệ thống (System Architecture)
 
+### Kiến trúc A — NFNet-F0 + E5 Late Fusion
+
 ```
-                     ┌───────────────────────────────────────────┐
-                     │           DỮ LIỆU ĐẦU VÀO                 │
-                     │    [Hình ảnh sản phẩm]  +  [Tiêu đề]      │
-                     └─────────────────────┬─────────────────────┘
-                                           │
-                 ┌─────────────────────────┴─────────────────────────┐
-                 │                                                   │
-                 ▼ (Ảnh: 224x224)                                    ▼ (Text: "query: " + Title)
-    ┌───────────────────────────┐                       ┌───────────────────────────┐
-    │     NFNet-F0 Backbone     │                       │   multilingual-E5-large   │
-    │  - Frozen: stem + stage0,1│                       │  - Frozen: layers 0..17   │
-    │  - Trainable: stage2,3    │                       │  - Trainable: layers 18..23│
-    └────────────┬──────────────┘                       └────────────┬──────────────┘
-                 │                                                   │
-                 ▼                                                   ▼
-    ┌───────────────────────────┐                       ┌───────────────────────────┐
-    │     GeM Pooling (p=3)     │                       │       Mean Pooling        │
-    └────────────┬──────────────┘                       └────────────┬──────────────┘
-                 │                                                   │
-                 ▼                                                   ▼
-    ┌───────────────────────────┐                       ┌───────────────────────────┐
-    │ Linear Projection (512-d) │                       │ Linear Projection (512-d) │
-    │       BatchNorm1d         │                       │       BatchNorm1d         │
-    └────────────┬──────────────┘                       └────────────┬──────────────┘
-                 │                                                   │
-                 ├─────────────────────────┬─────────────────────────┤
-                 ▼                         ▼                         ▼
-    ┌─────────────────────────┐           │           ┌─────────────────────────┐
-    │  ArcFace Training Head  │           │           │  ArcFace Training Head  │
-    │   (s = 30.0, m = 0.50)  │           │           │   (s = 30.0, m = 0.50)  │
-    └─────────────────────────┘           │           └─────────────────────────┘
-                                          ▼
-                             ┌─────────────────────────┐
-                             │    L2-Normalization     │
-                             │ (Hypersphere Embedding) │
-                             └────────────┬────────────┘
-                                          │
-                                          ▼
-                             ┌─────────────────────────┐
-                             │   Late Fusion & Cosine  │
-                             │     Threshold Sweep     │
-                             │   (Shopee Test & VN)    │
-                             └─────────────────────────┘
+     [Ảnh sản phẩm (224x224)]               [Tiêu đề — "query: " + text]
+              │                                          │
+              ▼                                          ▼
+  ┌─────────────────────────┐              ┌──────────────────────────────┐
+  │     NFNet-F0 Backbone   │              │   multilingual-E5-large      │
+  │  Frozen: stem+stage0,1  │              │  Frozen: layers 0..17        │
+  │  Trainable: stage2,3    │              │  Trainable: layers 18..23    │
+  └────────────┬────────────┘              └────────────┬─────────────────┘
+               │                                        │
+               ▼                                        ▼
+  ┌─────────────────────────┐              ┌──────────────────────────────┐
+  │    GeM Pooling (p=3)    │              │        Mean Pooling          │
+  │  → Linear(512) + BN     │              │   → Linear(512) + BN         │
+  └────────────┬────────────┘              └────────────┬─────────────────┘
+               │  [Train]  ArcFace Head                  │  [Train]  ArcFace Head
+               │  [Infer]  L2-Normalize                  │  [Infer]  L2-Normalize
+               │                                        │
+               └─────────────────┬──────────────────────┘
+                                 ▼
+                  ┌──────────────────────────────┐
+                  │   Late Fusion (Concat/Union)  │
+                  │   Cosine Threshold Sweep      │
+                  │   → Shopee Test & VN Test     │
+                  └──────────────────────────────┘
+```
+
+### Kiến trúc B — CLIP Fine-tuned
+
+```
+  [Ảnh sản phẩm]    [Tiêu đề văn bản]
+         │                  │
+         ▼                  ▼
+  ┌──────────────────────────────────┐
+  │          CLIP Encoder            │
+  │  ViT-B/32                        │
+  │  Image Encoder + Text Encoder    │
+  │  → Joint embedding space (512-d) │
+  └──────────────────┬───────────────┘
+                     │  [Train]  ArcFace Head (s=30, m=0.50)
+                     │  [Infer]  L2-Normalize
+                     ▼
+       ┌──────────────────────────┐
+       │   Cosine Threshold Sweep │
+       │ → Shopee Test & VN Test  │
+       └──────────────────────────┘
 ```
 
 ---
 
-## 3. Bộ dữ liệu & Chiến lược phân chia (Datasets & Split Strategy)
+## 3. Kế hoạch đánh giá (Evaluation Plan)
 
-### 3.1. Dữ liệu sử dụng
+| Phase | Mô hình | Kiểu | Tập dữ liệu train | Mục tiêu |
+| :--- | :--- | :---: | :--- | :--- |
+| **Phase 1A** | E5-large zero-shot | Text | _(không train)_ | Baseline text đa ngữ |
+| **Phase 1B** | NFNet-F0 zero-shot | Image | _(không train)_ | Baseline image |
+| **Phase 1C** | CLIP zero-shot | Multimodal | _(không train)_ | Baseline multimodal mạnh |
+| **Phase 2A** | E5-large + ArcFace | Text fine-tuned | `merge_train.csv` | Upper-bound text |
+| **Phase 2B** | NFNet-F0 + ArcFace | Image fine-tuned | `merge_train.csv` | Upper-bound image |
+| **Phase 2C** | **NFNet-F0 + E5 + Late Fusion** | Multimodal (A) | `merge_train.csv` | **So sánh chính** |
+| **Phase 2D** | **CLIP + ArcFace** | Multimodal (B) | `merge_train.csv` | **So sánh chính** |
+
+
+## 4. Bộ dữ liệu & Chiến lược phân chia (Datasets & Split Strategy)
+
+### 4.1. Dữ liệu sử dụng
 - **Shopee quốc tế (`Shopee.csv`)**: 34.250 sản phẩm, 11.014 nhóm nhãn (`label_group`)
 - **Shopee loại bỏ tiếng Indo (`shopee_no_indo.csv`)**: 25.459 sản phẩm, 8.307 nhóm nhãn (dữ liệu sau khi xử lý loại bỏ các nhóm có tiếng Indonesia).
 - **Dữ liệu sản phẩm tiếng Việt (`vietnamese.csv`)**: 2.003 sản phẩm, 447 nhóm nhãn (dữ liệu thu thập thực tế trên Shopee Việt Nam).
 
-### 3.2. Chiến lược chia dữ liệu (80/20 Group-Aware Split)
+### 4.2. Chiến lược chia dữ liệu (80/20 Group-Aware Split)
 Nhằm tránh hiện tượng rò rỉ dữ liệu (data leakage) tuyệt đối giữa tập Train và Test:
 1. **Tập Huấn luyện (80% Merged Train)**:
-   - `merge_train.csv`: Kết hợp 80% Shopee + 80% Vietnamese (~28.396 dòng, ~9.011 nhóm).
+   - `merge_train.csv`: Kết hợp 80% Shopee + 80% Vietnamese.
    - `merge_train_no_indo.csv`: Kết hợp 80% Shopee (đã lọc Indo) + 80% Vietnamese.
 2. **Tập Đánh giá Kiểm thử (20% Held-out Test - Đánh giá độc lập)**:
    - `shopee_test.csv` (20% Shopee gốc)
@@ -96,7 +121,7 @@ Nhằm tránh hiện tượng rò rỉ dữ liệu (data leakage) tuyệt đối
 
 ---
 
-## 4. Cấu trúc thư mục mã nguồn
+## 5. Cấu trúc thư mục mã nguồn
 
 ```
 LSHH-LuanVan-09-2026/
