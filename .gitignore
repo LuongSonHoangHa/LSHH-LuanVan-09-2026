@@ -1,0 +1,62 @@
+# Python Virtual Environment
+.venv/
+env/
+venv/
+ENV/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Model Weights, Checkpoints & Embeddings
+*.npy
+*.npz
+*.pkl
+*.pth
+*.pt
+*.bin
+*.weights
+*.h5
+*.onnx
+
+# Compressed & Large Archives
+*.rar
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+
+# Image Datasets (stored externally - see README for download links)
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+*.bmp
+*.tiff
+
+# Ignore Raw Image Folders if present
+data/raw/shopee/
+data/raw/vietnamese/
+train_images/
+vietnamese/
+
+# Outputs & Run Artifacts
+outputs/
+runs/
+logs/
+*.log
+
+# OS & IDE Configuration
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# tools
+tools/
