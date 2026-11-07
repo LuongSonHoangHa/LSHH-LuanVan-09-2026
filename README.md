@@ -8,7 +8,7 @@
 
 ### 1.1. Đặt vấn đề
 Trong các sàn thương mại điện tử (Shopee, Tiki, Lazada, ...), cùng một sản phẩm vật lý thường được đăng tải bởi nhiều người bán khác nhau với:
-- **Tiêu đề đa ngôn ngữ, không đồng nhất**: viết tắt, lỗi chính tả, thứ tự từ bị xáo trộn, xen lẫn tiếng Anh, tiếng Việt, tiếng Indonesia.
+- **Tiêu đề đa ngôn ngữ, không đồng nhất**: viết tắt, lỗi chính tả, thứ tự từ bị xáo trộn, xen lẫn tiếng Anh và tiếng Việt.
 - **Hình ảnh đa dạng**: ảnh chụp studio, ảnh chụp thực tế, ảnh nền tùy chỉnh, chèn watermark, góc chụp và điều kiện chiếu sáng khác nhau.
 
 **Mục tiêu**: Cho một sản phẩm sản phẩm gồm cặp `(image, title)`, hệ thống cần truy xuất và gom cụm tất cả các sản phẩm thuộc cùng một sản phẩm vật lý (`label_group`) trên toàn sàn.
@@ -26,7 +26,7 @@ Hai encoder độc lập, mỗi mô thức xử lý riêng biệt rồi hợp nh
 #### Kiến trúc B — CLIP (Joint Multimodal Encoder)
 Một encoder duy nhất được huấn luyện sẵn để hiểu đồng thời ảnh và văn bản:
 - **CLIP** (ViT-B/32) — joint image-text embedding space
-- Tinh chỉnh với ArcFace trên tập huấn luyện (`merge_train.csv`)
+- Tinh chỉnh với ArcFace trên tập huấn luyện (`merge_train_no_indo.csv`)
 - Cosine retrieval trực tiếp trên embedding CLIP + ArcFace head
 
 #### Hàm mất mát chung — ArcFace (Additive Angular Margin Loss)
@@ -96,28 +96,25 @@ $$L = -\log\frac{e^{s\cdot\cos(\theta_{y_i} + m)}}{e^{s\cdot\cos(\theta_{y_i} + 
 | **Phase 1A** | E5-large zero-shot | Text | _(không train)_ | Baseline text đa ngữ |
 | **Phase 1B** | NFNet-F0 zero-shot | Image | _(không train)_ | Baseline image |
 | **Phase 1C** | CLIP zero-shot | Multimodal | _(không train)_ | Baseline multimodal mạnh |
-| **Phase 2A** | E5-large + ArcFace | Text fine-tuned | `merge_train.csv` | Upper-bound text |
-| **Phase 2B** | NFNet-F0 + ArcFace | Image fine-tuned | `merge_train.csv` | Upper-bound image |
-| **Phase 2C** | **NFNet-F0 + E5 + Late Fusion** | Multimodal (A) | `merge_train.csv` | **So sánh chính** |
-| **Phase 2D** | **CLIP + ArcFace** | Multimodal (B) | `merge_train.csv` | **So sánh chính** |
+| **Phase 2A** | E5-large + ArcFace | Text fine-tuned | `merge_train_no_indo.csv` | Upper-bound text |
+| **Phase 2B** | NFNet-F0 + ArcFace | Image fine-tuned | `merge_train_no_indo.csv` | Upper-bound image |
+| **Phase 2C** | **NFNet-F0 + E5 + Late Fusion** | Multimodal (A) | `merge_train_no_indo.csv` | **So sánh chính** |
+| **Phase 2D** | **CLIP + ArcFace** | Multimodal (B) | `merge_train_no_indo.csv` | **So sánh chính** |
 
 
 ## 4. Bộ dữ liệu & Chiến lược phân chia (Datasets & Split Strategy)
 
 ### 4.1. Dữ liệu sử dụng
-- **Shopee quốc tế (`Shopee.csv`)**: 34.250 sản phẩm, 11.014 nhóm nhãn (`label_group`)
-- **Shopee loại bỏ tiếng Indo (`shopee_no_indo.csv`)**: 25.459 sản phẩm, 8.307 nhóm nhãn (dữ liệu sau khi xử lý loại bỏ các nhóm có tiếng Indonesia).
+- **Shopee loại bỏ tiếng Indo (`shopee_no_indo.csv`)**: 25.459 sản phẩm, 8.307 nhóm nhãn (`label_group`) — dữ liệu Shopee sau khi xử lý loại bỏ các nhóm có tiếng Indonesia, giữ lại sản phẩm tiếng Anh.
 - **Dữ liệu sản phẩm tiếng Việt (`vietnamese.csv`)**: 2.003 sản phẩm, 447 nhóm nhãn (dữ liệu thu thập thực tế trên Shopee Việt Nam).
 
 ### 4.2. Chiến lược chia dữ liệu (80/20 Group-Aware Split)
 Nhằm tránh hiện tượng rò rỉ dữ liệu (data leakage) tuyệt đối giữa tập Train và Test:
 1. **Tập Huấn luyện (80% Merged Train)**:
-   - `merge_train.csv`: Kết hợp 80% Shopee + 80% Vietnamese.
    - `merge_train_no_indo.csv`: Kết hợp 80% Shopee (đã lọc Indo) + 80% Vietnamese.
 2. **Tập Đánh giá Kiểm thử (20% Held-out Test - Đánh giá độc lập)**:
-   - `shopee_test.csv` (20% Shopee gốc)
-   - `shopee_no_indo_test.csv`: (20% tập Shopee đã lọc tiếng Indo).
-   - `vietnamese_test.csv` (20% dữ liệu Việt Nam): Đánh giá mô hình trên dữ liệu tiếng Việt.
+   - `shopee_no_indo_test.csv`: 20% tập Shopee đã lọc tiếng Indo.
+   - `vietnamese_test.csv`: 20% dữ liệu Việt Nam (đánh giá mô hình trên dữ liệu tiếng Việt).
 
 ---
 
@@ -127,13 +124,10 @@ Nhằm tránh hiện tượng rò rỉ dữ liệu (data leakage) tuyệt đối
 LSHH-LuanVan-09-2026/
 ├── data/                               # Dữ liệu bảng CSV (metadata & splits)
 │   ├── raw/
-│   │   ├── Shopee.csv                  # Dữ liệu gốc Shopee
 │   │   ├── shopee_no_indo.csv          # Dữ liệu Shopee đã lọc bỏ tiếng Indo
 │   │   └── vietnamese.csv              # Dữ liệu sản phẩm Việt Nam
 │   └── processed/
-│       ├── merge_train.csv             # Tập train hợp nhất (Shopee + VN)
 │       ├── merge_train_no_indo.csv     # Tập train hợp nhất (No-Indo + VN)
-│       ├── shopee_test.csv             # Tập test đánh giá Shopee
 │       ├── shopee_no_indo_test.csv     # Tập test đánh giá Shopee No-Indo
 │       └── vietnamese_test.csv         # Tập test đánh giá sản phẩm Việt Nam
 │
